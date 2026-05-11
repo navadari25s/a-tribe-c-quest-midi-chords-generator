@@ -1,615 +1,272 @@
-import React, { useRef, useState, useEffect, useCallback } from "react";
-import * as Tone from "tone";
-
-/**
- * ─── CONSTANTES MUSICALES ───
- */
-const BPM = 98;
-const SPB = 60 / BPM;
-const SP8 = SPB / 2;
-
-const MODES = {
-  ionian:      [0, 2, 4, 5, 7, 9, 11],
-  dorian:      [0, 2, 3, 5, 7, 9, 10],
-  phrygian:    [0, 1, 3, 5, 7, 8, 10],
-  lydian:      [0, 2, 4, 6, 7, 9, 11],
-  mixolydian:  [0, 2, 4, 5, 7, 9, 10],
-  aeolian:     [0, 2, 3, 5, 7, 8, 10],
-  locrian:     [0, 1, 3, 5, 6, 8, 10],
-};
-
-const ESTRUCTURAS = [
-  [0, 7, 9, 14, 16],
-  [0, 7, 10, 14, 17],
-  [0, 4, 7, 9, 12],
-  [0, 11, 14, 16, 19],
-  [0, 4, 7, 9, 12],
-  [0, 2, 4, 9, 11],
-];
-
-const ROOTS = [48, 50, 52, 53, 55, 57];
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-
-// Muestras de Piano Salamander (Steinway Grand)
-const SALAMANDER_BASE = "https://tonejs.github.io/audio/salamander/";
-const SALAMANDER_URLS = {
-  A0: "A0.mp3", C1: "C1.mp3", "D#1": "Ds1.mp3", "F#1": "Fs1.mp3",
-  A1: "A1.mp3", C2: "C2.mp3", "D#2": "Ds2.mp3", "F#2": "Fs2.mp3",
-  A2: "A2.mp3", C3: "C3.mp3", "D#3": "Ds3.mp3", "F#3": "Fs3.mp3",
-  A3: "A3.mp3", C4: "C4.mp3", "D#4": "Ds4.mp3", "F#4": "Fs4.mp3",
-  A4: "A4.mp3", C5: "C5.mp3", "D#5": "Ds5.mp3", "F#5": "Fs5.mp3",
-  A5: "A5.mp3", C6: "C6.mp3", "D#6": "Ds6.mp3", "F#6": "Fs6.mp3",
-  A6: "A6.mp3", C7: "C7.mp3", "D#7": "Ds7.mp3", "F#7": "Fs7.mp3",
-  A7: "A7.mp3", C8: "C8.mp3",
-};
-
-// Muestras de Batería Acústica
-const DRUM_BASE = "https://tonejs.github.io/audio/drum-samples/acoustic-kit/";
-
-/**
- * ─── FUNCIONES DE AYUDA ───
- */
-const pick = (a) => a[Math.floor(Math.random() * a.length)];
-const rndInt = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
-const midiName = (m) => NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
-const fmtT = (s) => {
-  const m = Math.floor(s / 60);
-  return `${m}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
-};
-const getScaleNotes = (root, mode) => MODES[mode].map((i) => (root + i) % 12);
-
-/**
- * ─── GENERACIÓN DE MÚSICA ───
- */
-function generate() {
-  const notes = [];
-  const rootBase = pick(ROOTS);
-  const mainMode = pick(Object.keys(MODES));
-
-  for (let vuelta = 0; vuelta < 2; vuelta++) {
-    const trans = vuelta === 0 ? 0 : 2;
-    const offset = vuelta * 8 * 4 * SPB;
-    const currentRoot = rootBase + trans;
-
-    for (let bar = 0; bar < 8; bar++) {
-      const barStart = offset + bar * 4 * SPB;
-      const numChords = pick([2, 3]);
-      let cStarts = [0];
-      for (let c = 0; c < numChords - 1; c++) cStarts.push(pick([1, 2, 3, 4, 5, 6, 7]));
-      cStarts = [...new Set(cStarts)].sort((a, b) => a - b);
-
-      for (let i = 0; i < cStarts.length; i++) {
-        const t0 = barStart + cStarts[i] * SP8;
-        const t1 = i < cStarts.length - 1 ? barStart + cStarts[i + 1] * SP8 : barStart + 8 * SP8;
-        const allowedNotes = getScaleNotes(currentRoot, mainMode);
-        const chordRootNote = currentRoot + pick(MODES[mainMode]);
-
-        let finalChordIntervals = null;
-        const shuffledIndexes = [0, 1, 2, 3, 4, 5].sort(() => Math.random() - 0.5);
-
-        for (const idx of shuffledIndexes) {
-          const candidateIntervals = ESTRUCTURAS[idx];
-          const isDiatonic = candidateIntervals.every((interval) => {
-            const note = (chordRootNote + interval) % 12;
-            return allowedNotes.includes(note);
-          });
-          if (isDiatonic) {
-            finalChordIntervals = candidateIntervals;
-            break;
-          }
-        }
-
-        if (finalChordIntervals) {
-          for (const iv of finalChordIntervals) {
-            let p = chordRootNote + iv;
-            while (p > 72) p -= 12;
-            notes.push({ type: "base", pitch: p, vel: 70, s: t0, e: t1 });
-          }
-        }
-
-        let step = cStarts[i];
-        while (barStart + step * SP8 < t1) {
-          if (Math.random() < 0.6) {
-            const melNote = currentRoot + pick(MODES[mainMode]);
-            const octave = pick([24, 36]);
-            const dur = pick([SP8, SP8 * 2]);
-            notes.push({
-              type: "solo",
-              pitch: (melNote + octave) & 127,
-              vel: rndInt(85, 95),
-              s: barStart + step * SP8,
-              e: Math.min(barStart + step * SP8 + dur, t1),
-            });
-          }
-          step++;
-        }
-      }
-
-      // Drums logic
-      for (let p = 0; p < 4; p++) {
-        const t = barStart + p * SPB;
-        notes.push({ type: "drum", pitch: p === 0 || p === 2 ? 36 : 38, vel: 110, s: t, e: t + 0.1 });
-      }
-      for (let s = 0; s < 16; s++) {
-        const t = barStart + s * (SPB / 4);
-        notes.push({ type: "drum", pitch: 42, vel: rndInt(70, 85), s: t, e: t + 0.05 });
-      }
-    }
-  }
-
-  return { notes, totalDur: 16 * 4 * SPB, rootBase, mainMode };
-}
-
-/**
- * ─── EXPORTACIÓN MIDI ───
- */
-function buildMidi(comp) {
-  const TPQN = 480;
-  const mspb = Math.round(60000000 / BPM);
-  const secToTick = (s) => Math.round((s * TPQN * BPM) / 60);
-
-  function writeVarLen(buf, v) {
-    v = v >>> 0;
-    const b = [v & 0x7f];
-    v >>= 7;
-    while (v > 0) {
-      b.unshift((v & 0x7f) | 0x80);
-      v >>= 7;
-    }
-    b.forEach((x) => buf.push(x));
-  }
-  function writeU32(buf, v) { buf.push((v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff); }
-  function writeU16(buf, v) { buf.push((v >>> 8) & 0xff, v & 0xff); }
-
-  function buildTrackBytes(notes, ch) {
-    const evs = [];
-    notes.forEach((n) => {
-      const ts = secToTick(n.s);
-      const te = Math.max(secToTick(n.e), ts + 1);
-      const p = n.pitch & 0x7f;
-      const v = n.vel & 0x7f;
-      evs.push({ tick: ts, msg: [0x90 | ch, p, v] });
-      evs.push({ tick: te, msg: [0x80 | ch, p, 0] });
-    });
-    evs.sort((a, b) => (a.tick !== b.tick ? a.tick - b.tick : (a.msg[0] & 0xf0) - (b.msg[0] & 0xf0)));
-    const data = [];
-    let cur = 0;
-    evs.forEach((e) => {
-      const dt = Math.max(0, e.tick - cur);
-      cur = e.tick;
-      writeVarLen(data, dt);
-      e.msg.forEach((b) => data.push(b));
-    });
-    data.push(0x00, 0xff, 0x2f, 0x00);
-    return data;
-  }
-
-  function makeChunk(id, data) {
-    const buf = [];
-    id.split("").forEach((c) => buf.push(c.charCodeAt(0)));
-    writeU32(buf, data.length);
-    data.forEach((b) => buf.push(b));
-    return buf;
-  }
-
-  const tempoData = [0x00, 0xff, 0x51, 0x03, (mspb >> 16) & 0xff, (mspb >> 8) & 0xff, mspb & 0xff, 0x00, 0xff, 0x2f, 0x00];
-  const headerData = [];
-  writeU16(headerData, 1);
-  writeU16(headerData, 4);
-  writeU16(headerData, TPQN);
-
-  const allBytes = [
-    ...makeChunk("MThd", headerData),
-    ...makeChunk("MTrk", tempoData),
-    ...makeChunk("MTrk", buildTrackBytes(comp.notes.filter((n) => n.type === "base"), 0)),
-    ...makeChunk("MTrk", buildTrackBytes(comp.notes.filter((n) => n.type === "solo"), 1)),
-    ...makeChunk("MTrk", buildTrackBytes(comp.notes.filter((n) => n.type === "drum"), 9)),
-  ];
-  return new Uint8Array(allBytes);
-}
-
-/**
- * ─── PIANO ROLL ───
- */
-function drawRoll(canvas, comp) {
-  const W = canvas.parentElement?.clientWidth ?? 500;
-  const H = 90;
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  const melodic = comp.notes.filter((n) => n.type !== "drum");
-  if (melodic.length === 0) return;
-
-  const pitches = melodic.map((n) => n.pitch);
-  const minP = Math.min(...pitches) - 2;
-  const maxP = Math.max(...pitches) + 2;
-  const pR = maxP - minP || 1;
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = "rgba(167, 139, 250, 0.04)";
-  ctx.fillRect(W / 2, 0, W / 2, H);
-
-  const xS = (t) => (t / comp.totalDur) * W;
-  const yS = (p) => H - ((p - minP) / pR) * H;
-
-  for (const n of melodic) {
-    const x = xS(n.s);
-    const w = Math.max(2, xS(n.e) - xS(n.s) - 1);
-    const y = yS(n.pitch) - 2;
-    ctx.fillStyle = n.type === "base" ? "rgba(124, 58, 237, 0.75)" : "rgba(14, 165, 233, 0.85)";
-    ctx.fillRect(x, y, w, 4);
-  }
-}
-
-/**
- * ─── COMPONENTE PRINCIPAL ───
- */
-export default function App() {
-  const [comp, setComp] = useState(null);
-  const [status, setStatus] = useState({ msg: "Presiona Generar para empezar", cls: "" });
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [timeCur, setTimeCur] = useState("0:00");
-  const [timeTot, setTimeTot] = useState("0:00");
-  const [samplesReady, setSamplesReady] = useState(false);
-  const [samplesLoading, setSamplesLoading] = useState(false);
-  const [rootDisp, setRootDisp] = useState("—");
-  const [modeDisp, setModeDisp] = useState("—");
-
-  const canvasRef = useRef(null);
-  const partsRef = useRef([]);
-  const samplersRef = useRef({ base: null, solo: null, kick: null, snare: null, hihat: null });
-  const progressTimerRef = useRef(null);
-  const compRef = useRef(null);
-
-  // Carga de muestras al inicio
-  useEffect(() => {
-    loadSamples();
-    return () => stopAll();
-  }, []);
-
-  // Redibujar roll si cambia la composición o el tamaño de la ventana
-  useEffect(() => {
-    const handleResize = () => {
-      if (comp && canvasRef.current) drawRoll(canvasRef.current, comp);
-    };
-    window.addEventListener("resize", handleResize);
-    handleResize();
-    return () => window.removeEventListener("resize", handleResize);
-  }, [comp]);
-
-  async function loadSamples() {
-    setSamplesLoading(true);
-    setStatus({ msg: "⏳ Cargando muestras reales de instrumentos...", cls: "active" });
-
-    try {
-      const baseSampler = new Tone.Sampler({
-        urls: SALAMANDER_URLS,
-        baseUrl: SALAMANDER_BASE,
-        release: 1.2,
-        volume: -6,
-      });
-
-      const soloSampler = new Tone.Sampler({
-        urls: SALAMANDER_URLS,
-        baseUrl: SALAMANDER_BASE,
-        release: 0.8,
-        volume: -4,
-      });
-
-      const kickPlayer = new Tone.Player({ url: DRUM_BASE + "kick.mp3", volume: 2 });
-      const snarePlayer = new Tone.Player({ url: DRUM_BASE + "snare.mp3", volume: -2 });
-      const hihatPlayer = new Tone.Player({ url: DRUM_BASE + "hihat.mp3", volume: -8 });
-
-      // Cadena de efectos
-      const reverb = new Tone.Reverb({ decay: 2.5, wet: 0.18 }).toDestination();
-      const chorus = new Tone.Chorus(4, 2.5, 0.3).toDestination().start();
-      const compressor = new Tone.Compressor(-20, 4).toDestination();
-      const drumBus = new Tone.Channel({ volume: 0, pan: 0 }).chain(compressor, Tone.Destination);
-      const pianoReverb = new Tone.Reverb({ decay: 1.8, wet: 0.22 }).toDestination();
-
-      baseSampler.chain(pianoReverb, Tone.Destination);
-      soloSampler.chain(chorus, reverb, Tone.Destination);
-      kickPlayer.connect(drumBus);
-      snarePlayer.connect(drumBus);
-      hihatPlayer.connect(drumBus);
-
-      await Tone.loaded();
-
-      samplersRef.current = {
-        base: baseSampler,
-        solo: soloSampler,
-        kick: kickPlayer,
-        snare: snarePlayer,
-        hihat: hihatPlayer,
-      };
-
-      setSamplesReady(true);
-      setSamplesLoading(false);
-      setStatus({ msg: "✓ Instrumentos cargados — Presiona Generar", cls: "ok" });
-    } catch (err) {
-      setSamplesLoading(false);
-      setStatus({ msg: "⚠ Error cargando muestras", cls: "err" });
-      console.error(err);
-    }
-  }
-
-  const stopAll = useCallback(() => {
-    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
-    Tone.Transport.stop();
-    Tone.Transport.cancel(0);
-    partsRef.current.forEach((p) => {
-      try {
-        p.dispose();
-      } catch (e) {}
-    });
-    partsRef.current = [];
-    setIsPlaying(false);
-    setProgress(0);
-    setTimeCur("0:00");
-  }, []);
-
-  const onGenerate = useCallback(() => {
-    stopAll();
-    setIsGenerating(true);
-    setStatus({ msg: "Generando composición...", cls: "active" });
-
-    setTimeout(() => {
-      const c = generate();
-      compRef.current = c;
-      setComp(c);
-      setRootDisp(midiName(c.rootBase));
-      setModeDisp(c.mainMode.toUpperCase());
-      setTimeTot(fmtT(c.totalDur));
-      if (canvasRef.current) drawRoll(canvasRef.current, c);
-      setIsGenerating(false);
-      setStatus({ msg: "✓ Composición lista — Presiona Reproducir", cls: "ok" });
-    }, 50);
-  }, [stopAll]);
-
-  const onPlay = useCallback(async () => {
-    const c = compRef.current;
-    if (!c) return;
-
-    await Tone.start();
-    stopAll();
-    setIsPlaying(true);
-    setStatus({ msg: "🎹 Reproduciendo con instrumentos reales...", cls: "active" });
-
-    const { base, solo, kick, snare, hihat } = samplersRef.current;
-    Tone.Transport.bpm.value = BPM;
-
-    const baseNotes = c.notes.filter((n) => n.type === "base");
-    const soloNotes = c.notes.filter((n) => n.type === "solo");
-    const drumNotes = c.notes.filter((n) => n.type === "drum");
-
-    // Parte de Piano Base
-    if (base) {
-      const pBase = new Tone.Part((t, v) => {
-        try {
-          base.triggerAttackRelease(v.p, v.d, t, v.vel);
-        } catch (e) {}
-      }, baseNotes.map((n) => ({
-        time: n.s,
-        p: Tone.Frequency(n.pitch, "midi").toNote(),
-        d: Math.max(0.05, n.e - n.s),
-        vel: n.vel / 127,
-      }))).start(0);
-      partsRef.current.push(pBase);
-    }
-
-    // Parte de Solo
-    if (solo) {
-      const pSolo = new Tone.Part((t, v) => {
-        try {
-          solo.triggerAttackRelease(v.p, v.d, t, v.vel);
-        } catch (e) {}
-      }, soloNotes.map((n) => ({
-        time: n.s,
-        p: Tone.Frequency(n.pitch, "midi").toNote(),
-        d: Math.max(0.05, n.e - n.s),
-        vel: n.vel / 127,
-      }))).start(0);
-      partsRef.current.push(pSolo);
-    }
-
-    // Parte de Batería
-    const pDrum = new Tone.Part((t, v) => {
-      try {
-        if (v.p === 36 && kick) {
-          kick.volume.value = Tone.gainToDb(v.vel / 127) + 2;
-          kick.start(t).stop(t + 0.5);
-        } else if (v.p === 38 && snare) {
-          snare.volume.value = Tone.gainToDb(v.vel / 127) - 2;
-          snare.start(t).stop(t + 0.3);
-        } else if (v.p === 42 && hihat) {
-          hihat.volume.value = Tone.gainToDb(v.vel / 127) - 10;
-          hihat.start(t).stop(t + 0.06);
-        }
-      } catch (e) {}
-    }, drumNotes.map((n) => ({ time: n.s, p: n.pitch, vel: n.vel }))).start(0);
-    partsRef.current.push(pDrum);
-
-    Tone.Transport.start();
-
-    progressTimerRef.current = setInterval(() => {
-      const elapsed = Tone.Transport.seconds;
-      setProgress((elapsed / c.totalDur) * 100);
-      setTimeCur(fmtT(elapsed));
-      if (elapsed >= c.totalDur) {
-        stopAll();
-        setStatus({ msg: "✓ Reproducción finalizada", cls: "ok" });
-      }
-    }, 200);
-  }, [stopAll]);
-
-  const onStop = useCallback(() => {
-    stopAll();
-    setStatus({ msg: "Detenido", cls: "" });
-  }, [stopAll]);
-
-  const onDownload = useCallback(() => {
-    const c = compRef.current;
-    if (!c) return;
-    try {
-      const u8 = buildMidi(c);
-      const blob = new Blob([u8.buffer], { type: "audio/midi" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `comp_${c.mainMode}_${midiName(c.rootBase)}.mid`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus({ msg: "✓ MIDI descargado", cls: "ok" });
-    } catch (err) {
-      setStatus({ msg: "✗ Error: " + err.message, cls: "err" });
-    }
-  }, []);
-
-  const statusClass =
-    status.cls === "active" ? "text-violet-400" :
-    status.cls === "ok" ? "text-green-400" :
-    status.cls === "err" ? "text-red-400" : "text-zinc-500";
-
-  const canGenerate = !isGenerating && !samplesLoading;
-  const canPlay = samplesReady && !!comp && !isPlaying && !isGenerating;
-  const canStop = isPlaying;
-  const canDownload = !!comp && !isGenerating;
-
-  return (
-    <div className="min-h-screen flex flex-col items-center px-4 py-8"
-         style={{ background: "#0a0a0f", color: "#e0e0e0", fontFamily: "system-ui, sans-serif" }}>
-
-      <h1 className="text-2xl font-bold mb-1 text-center bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent">
-        🎹 Compositor MIDI Modulado
-      </h1>
-      <p className="text-zinc-600 text-xs mb-6 text-center">
-        Salamander Grand Piano · Acoustic Drum Kit · Algoritmos Diatónicos
-      </p>
-
-      {/* Tarjeta de Parámetros */}
-      <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 w-full max-w-xl mb-4">
-        <div className="text-[10px] uppercase tracking-widest text-zinc-600 mb-4 font-semibold">Parámetros</div>
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            { label: "Tempo", value: `${BPM} BPM` },
-            { label: "Estructura", value: "16 compases" },
-            { label: "Nota raíz", value: rootDisp },
-            { label: "Modo principal", value: modeDisp },
-          ].map(({ label, value }) => (
-            <div key={label} className="bg-black/40 border border-zinc-800/50 rounded-xl p-3">
-              <div className="text-[10px] text-zinc-500 mb-1">{label}</div>
-              <div className="text-sm font-semibold text-violet-400">{value}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="flex gap-3 mt-4 flex-wrap">
-          {[
-            { color: "#7c3aed", label: "Base" },
-            { color: "#0ea5e9", label: "Solo" },
-            { color: "#f59e0b", label: "Drums" },
-          ].map(({ color, label }) => (
-            <div key={label} className="flex items-center gap-1.5 text-[10px] text-zinc-500">
-              <div className="w-2 h-2 rounded-full" style={{ background: color }} />
-              {label}
-            </div>
-          ))}
-        </div>
-
-        {samplesLoading && (
-          <div className="mt-4">
-            <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
-              <div className="h-full bg-violet-500 w-1/2 animate-[progress_2s_infinite_linear]" />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Tarjeta de Reproducción y Visualización */}
-      <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 w-full max-w-xl">
-        <div className="text-[10px] uppercase tracking-widest text-zinc-600 mb-3 font-semibold">Visualizador</div>
-        
-        <div className="relative w-full h-24 bg-black/50 border border-zinc-800/50 rounded-xl overflow-hidden mb-3">
-          <canvas ref={canvasRef} className="w-full h-full block" />
-          {!comp && (
-            <div className="absolute inset-0 flex items-center justify-center text-zinc-700 text-xs italic">
-              Genera música para visualizar el piano roll
-            </div>
-          )}
-        </div>
-
-        {/* Barra de Progreso */}
-        <div className="h-1 bg-zinc-800 rounded-full w-full mb-1.5 overflow-hidden border border-zinc-800/20">
-          <div 
-            className="h-full bg-gradient-to-r from-violet-500 to-blue-500 transition-all duration-300" 
-            style={{ width: `${progress}%` }} 
-          />
-        </div>
-        <div className="flex justify-between text-[10px] text-zinc-500 mb-5">
-          <span>{timeCur}</span>
-          <span>{timeTot}</span>
-        </div>
-
-        {/* Controles */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <button
-            disabled={!canGenerate}
-            onClick={onGenerate}
-            className="flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm bg-gradient-to-br from-violet-600 to-blue-600 text-white disabled:opacity-20 transition-all active:scale-95"
-          >
-            🎲 Generar
-          </button>
-
-          <button
-            disabled={!canPlay}
-            onClick={onPlay}
-            className="flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm bg-green-900/40 text-green-400 border border-green-800/50 disabled:opacity-20 transition-all active:scale-95"
-          >
-            ▶ Play
-          </button>
-
-          <button
-            disabled={!canStop}
-            onClick={onStop}
-            className="flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm bg-red-950/30 text-red-400 border border-red-900/50 disabled:opacity-20 transition-all active:scale-95"
-          >
-            ■ Stop
-          </button>
-
-          <button
-            disabled={!canDownload}
-            onClick={onDownload}
-            className="flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm bg-orange-950/30 text-orange-400 border border-orange-900/50 disabled:opacity-20 transition-all active:scale-95"
-          >
-            ⬇ MIDI
-          </button>
-        </div>
-
-        <div className={`mt-4 text-center text-xs font-medium min-h-[1rem] ${statusClass}`}>
-          {status.msg}
-        </div>
-      </div>
-
-      <footer className="mt-8 text-zinc-700 text-[10px] flex gap-4 uppercase tracking-tighter">
-        <span>Tone.js Audio Engine</span>
-        <span>•</span>
-        <span>Steinway Piano Samples</span>
-        <span>•</span>
-        <span>MIDI Standard 1.0</span>
-      </footer>
-
-      <style dangerouslySetInnerHTML={{ __html: `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compositor MIDI Modulado</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Cargamos Tone.js desde CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <style>
         @keyframes progress {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(200%); }
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(200%); }
         }
-      `}} />
+        .animate-progress { animation: progress 2s infinite linear; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center px-4 py-8" style="background: #0a0a0f; color: #e0e0e0; font-family: system-ui, sans-serif;">
+
+    <h1 class="text-2xl font-bold mb-1 text-center bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent">
+        🎹 Compositor MIDI Modulado
+    </h1>
+    <p class="text-zinc-600 text-xs mb-6 text-center">
+        Salamander Grand Piano · Acoustic Drum Kit · Algoritmos Diatónicos
+    </p>
+
+    <!-- Tarjeta de Parámetros -->
+    <div class="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 w-full max-w-xl mb-4">
+        <div class="text-[10px] uppercase tracking-widest text-zinc-600 mb-4 font-semibold">Parámetros</div>
+        <div class="grid grid-cols-2 gap-3">
+            <div class="bg-black/40 border border-zinc-800/50 rounded-xl p-3">
+                <div class="text-[10px] text-zinc-500 mb-1">Tempo</div>
+                <div class="text-sm font-semibold text-violet-400">98 BPM</div>
+            </div>
+            <div class="bg-black/40 border border-zinc-800/50 rounded-xl p-3">
+                <div class="text-[10px] text-zinc-500 mb-1">Estructura</div>
+                <div class="text-sm font-semibold text-violet-400">16 compases</div>
+            </div>
+            <div class="bg-black/40 border border-zinc-800/50 rounded-xl p-3">
+                <div class="text-[10px] text-zinc-500 mb-1">Nota raíz</div>
+                <div id="rootDisp" class="text-sm font-semibold text-violet-400">—</div>
+            </div>
+            <div class="bg-black/40 border border-zinc-800/50 rounded-xl p-3">
+                <div class="text-[10px] text-zinc-500 mb-1">Modo principal</div>
+                <div id="modeDisp" class="text-sm font-semibold text-violet-400">—</div>
+            </div>
+        </div>
+
+        <div id="loadingBar" class="mt-4 hidden">
+            <div class="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                <div class="h-full bg-violet-500 w-1/2 animate-progress"></div>
+            </div>
+        </div>
     </div>
-  );
-}
+
+    <!-- Tarjeta de Reproducción -->
+    <div class="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 w-full max-w-xl">
+        <div class="relative w-full h-24 bg-black/50 border border-zinc-800/50 rounded-xl overflow-hidden mb-3">
+            <canvas id="pianoRoll" class="w-full h-full block"></canvas>
+        </div>
+
+        <!-- Barra de Progreso -->
+        <div class="h-1 bg-zinc-800 rounded-full w-full mb-1.5 overflow-hidden border border-zinc-800/20">
+            <div id="progressBar" class="h-full bg-gradient-to-r from-violet-500 to-blue-500 transition-all duration-300" style="width: 0%"></div>
+        </div>
+        <div class="flex justify-between text-[10px] text-zinc-500 mb-5">
+            <span id="timeCur">0:00</span>
+            <span id="timeTot">0:00</span>
+        </div>
+
+        <!-- Controles -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <button id="btnGen" class="py-3 rounded-xl font-bold text-sm bg-gradient-to-br from-violet-600 to-blue-600 text-white active:scale-95 disabled:opacity-20">🎲 Generar</button>
+            <button id="btnPlay" disabled class="py-3 rounded-xl font-bold text-sm bg-green-900/40 text-green-400 border border-green-800/50 active:scale-95 disabled:opacity-20">▶ Play</button>
+            <button id="btnStop" disabled class="py-3 rounded-xl font-bold text-sm bg-red-950/30 text-red-400 border border-red-900/50 active:scale-95 disabled:opacity-20">■ Stop</button>
+            <button id="btnMidi" disabled class="py-3 rounded-xl font-bold text-sm bg-orange-950/30 text-orange-400 border border-orange-900/50 active:scale-95 disabled:opacity-20">⬇ MIDI</button>
+        </div>
+
+        <div id="statusMsg" class="mt-4 text-center text-xs font-medium min-h-[1rem] text-zinc-500">
+            Cargando motores de audio...
+        </div>
+    </div>
+
+    <script>
+        /** ─── CONSTANTES Y LÓGICA MUSICAL ─── **/
+        const BPM = 98;
+        const SPB = 60 / BPM;
+        const SP8 = SPB / 2;
+        const MODES = {
+            ionian: [0, 2, 4, 5, 7, 9, 11], dorian: [0, 2, 3, 5, 7, 9, 10],
+            phrygian: [0, 1, 3, 5, 7, 8, 10], lydian: [0, 2, 4, 6, 7, 9, 11],
+            mixolydian: [0, 2, 4, 5, 7, 9, 10], aeolian: [0, 2, 3, 5, 7, 8, 10],
+            locrian: [0, 1, 3, 5, 6, 8, 10]
+        };
+        const ESTRUCTURAS = [[0, 7, 9, 14, 16], [0, 7, 10, 14, 17], [0, 4, 7, 9, 12], [0, 11, 14, 16, 19], [0, 4, 7, 9, 12], [0, 2, 4, 9, 11]];
+        const ROOTS = [48, 50, 52, 53, 55, 57];
+        const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+        let currentComp = null;
+        let samplers = {};
+        let activeParts = [];
+        let progressInterval;
+
+        const pick = (a) => a[Math.floor(Math.random() * a.length)];
+        const midiName = (m) => NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
+        const fmtT = (s) => {
+            const m = Math.floor(s / 60);
+            return `${m}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
+        };
+
+        /** ─── GENERACIÓN ─── **/
+        function generate() {
+            const notes = [];
+            const rootBase = pick(ROOTS);
+            const mainMode = pick(Object.keys(MODES));
+            const getScaleNotes = (r, m) => MODES[m].map(i => (r + i) % 12);
+
+            for (let vuelta = 0; vuelta < 2; vuelta++) {
+                const trans = vuelta === 0 ? 0 : 2;
+                const offset = vuelta * 8 * 4 * SPB;
+                const currentRoot = rootBase + trans;
+
+                for (let bar = 0; bar < 8; bar++) {
+                    const barStart = offset + bar * 4 * SPB;
+                    let cStarts = [0, ...Array(pick([1,2])).fill(0).map(() => pick([1,2,3,4,5,6,7]))];
+                    cStarts = [...new Set(cStarts)].sort((a, b) => a - b);
+
+                    for (let i = 0; i < cStarts.length; i++) {
+                        const t0 = barStart + cStarts[i] * SP8;
+                        const t1 = i < cStarts.length - 1 ? barStart + cStarts[i + 1] * SP8 : barStart + 8 * SP8;
+                        const chordRootNote = currentRoot + pick(MODES[mainMode]);
+                        const allowed = getScaleNotes(currentRoot, mainMode);
+
+                        const struct = ESTRUCTURAS.find(s => s.every(iv => allowed.includes((chordRootNote + iv) % 12))) || ESTRUCTURAS[0];
+                        struct.forEach(iv => {
+                            let p = chordRootNote + iv;
+                            while(p > 72) p -= 12;
+                            notes.push({ type: "base", pitch: p, vel: 70, s: t0, e: t1 });
+                        });
+
+                        let step = cStarts[i];
+                        while (barStart + step * SP8 < t1) {
+                            if (Math.random() < 0.6) {
+                                const melNote = currentRoot + pick(MODES[mainMode]);
+                                notes.push({
+                                    type: "solo", pitch: (melNote + pick([24, 36])) & 127,
+                                    vel: Math.floor(Math.random() * 10) + 85,
+                                    s: barStart + step * SP8, e: Math.min(barStart + step * SP8 + pick([SP8, SP8*2]), t1)
+                                });
+                            }
+                            step++;
+                        }
+                    }
+                    // Drums
+                    for(let p=0; p<4; p++) notes.push({ type:"drum", pitch: p%2===0?36:38, vel:110, s: barStart + p*SPB, e: barStart + p*SPB + 0.1 });
+                    for(let s=0; s<16; s++) notes.push({ type:"drum", pitch:42, vel: 75, s: barStart + s*(SPB/4), e: barStart + s*(SPB/4) + 0.05 });
+                }
+            }
+            return { notes, totalDur: 16 * 4 * SPB, rootBase, mainMode };
+        }
+
+        /** ─── INTERFAZ Y AUDIO ─── **/
+        async function initAudio() {
+            const status = document.getElementById('statusMsg');
+            document.getElementById('loadingBar').classList.remove('hidden');
+            
+            try {
+                const pianoUrls = { A0: "A0.mp3", C1: "C1.mp3", "D#1": "Ds1.mp3", "F#1": "Fs1.mp3", A1: "A1.mp3", C2: "C2.mp3", "D#2": "Ds2.mp3", "F#2": "Fs2.mp3", A2: "A2.mp3", C3: "C3.mp3", "D#3": "Ds3.mp3", "F#3": "Fs3.mp3", A3: "A3.mp3", C4: "C4.mp3", "D#4": "Ds4.mp3", "F#4": "Fs4.mp3", A4: "A4.mp3", C5: "C5.mp3", "D#5": "Ds5.mp3", "F#5": "Fs5.mp3", A5: "A5.mp3", C6: "C6.mp3", "D#6": "Ds6.mp3", "F#6": "Fs6.mp3", A6: "A6.mp3", C7: "C7.mp3", "D#7": "Ds7.mp3", "F#7": "Fs7.mp3", A7: "A7.mp3", C8: "C8.mp3" };
+                const base = "https://tonejs.github.io/audio/salamander/";
+                const drumBase = "https://tonejs.github.io/audio/drum-samples/acoustic-kit/";
+
+                samplers.base = new Tone.Sampler({ urls: pianoUrls, baseUrl: base, volume: -6 }).toDestination();
+                samplers.solo = new Tone.Sampler({ urls: pianoUrls, baseUrl: base, volume: -4 }).toDestination();
+                samplers.kick = new Tone.Player(drumBase + "kick.mp3").toDestination();
+                samplers.snare = new Tone.Player(drumBase + "snare.mp3").toDestination();
+                samplers.hihat = new Tone.Player(drumBase + "hihat.mp3").toDestination();
+
+                await Tone.loaded();
+                status.innerText = "✓ Instrumentos listos";
+                status.className = "mt-4 text-center text-xs font-medium text-green-400";
+                document.getElementById('loadingBar').classList.add('hidden');
+            } catch (e) {
+                status.innerText = "Error cargando muestras";
+                console.error(e);
+            }
+        }
+
+        function draw(comp) {
+            const canvas = document.getElementById('pianoRoll');
+            const ctx = canvas.getContext('2d');
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            const mel = comp.notes.filter(n => n.type !== "drum");
+            const ps = mel.map(n => n.pitch);
+            const minP = Math.min(...ps) - 2, maxP = Math.max(...ps) + 2;
+            
+            ctx.clearRect(0,0, canvas.width, canvas.height);
+            mel.forEach(n => {
+                const x = (n.s / comp.totalDur) * canvas.width;
+                const w = ((n.e - n.s) / comp.totalDur) * canvas.width;
+                const y = canvas.height - ((n.pitch - minP) / (maxP - minP)) * canvas.height;
+                ctx.fillStyle = n.type === "base" ? "#7c3aed" : "#0ea5e9";
+                ctx.fillRect(x, y, w, 4);
+            });
+        }
+
+        // --- Manejadores de Eventos ---
+        document.getElementById('btnGen').onclick = () => {
+            currentComp = generate();
+            document.getElementById('rootDisp').innerText = midiName(currentComp.rootBase);
+            document.getElementById('modeDisp').innerText = currentComp.mainMode.toUpperCase();
+            document.getElementById('timeTot').innerText = fmtT(currentComp.totalDur);
+            document.getElementById('btnPlay').disabled = false;
+            document.getElementById('btnMidi').disabled = false;
+            draw(currentComp);
+        };
+
+        document.getElementById('btnPlay').onclick = async () => {
+            await Tone.start();
+            Tone.Transport.stop();
+            Tone.Transport.cancel();
+            activeParts.forEach(p => p.dispose());
+            
+            const c = currentComp;
+            const schedule = (notes, sampler, isDrum = false) => {
+                return new Tone.Part((time, v) => {
+                    if(!isDrum) sampler.triggerAttackRelease(v.p, v.d, time, v.vel);
+                    else {
+                        if(v.p === 36) samplers.kick.start(time);
+                        if(v.p === 38) samplers.snare.start(time);
+                        if(v.p === 42) samplers.hihat.start(time);
+                    }
+                }, notes.map(n => ({ 
+                    time: n.s, p: isDrum ? n.pitch : Tone.Frequency(n.pitch, "midi").toNote(), 
+                    d: n.e - n.s, vel: n.vel/127 
+                }))).start(0);
+            };
+
+            activeParts = [
+                schedule(c.notes.filter(n => n.type === "base"), samplers.base),
+                schedule(c.notes.filter(n => n.type === "solo"), samplers.solo),
+                schedule(c.notes.filter(n => n.type === "drum"), null, true)
+            ];
+
+            Tone.Transport.start();
+            document.getElementById('btnPlay').disabled = true;
+            document.getElementById('btnStop').disabled = false;
+
+            progressInterval = setInterval(() => {
+                const curr = Tone.Transport.seconds;
+                const prog = (curr / c.totalDur) * 100;
+                document.getElementById('progressBar').style.width = prog + "%";
+                document.getElementById('timeCur').innerText = fmtT(curr);
+                if(curr >= c.totalDur) stopMusic();
+            }, 100);
+        };
+
+        function stopMusic() {
+            Tone.Transport.stop();
+            clearInterval(progressInterval);
+            document.getElementById('btnPlay').disabled = false;
+            document.getElementById('btnStop').disabled = true;
+            document.getElementById('progressBar').style.width = "0%";
+        }
+
+        document.getElementById('btnStop').onclick = stopMusic;
+
+        // Inicializar
+        window.onload = initAudio;
+    </script>
+</body>
+</html>
